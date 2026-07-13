@@ -1,5 +1,5 @@
 """
-Клиент для DeepSeek API (OpenAI-compatible).
+Клиент для DeepSeek API (OpenAI-compatible) с поддержкой streaming.
 """
 
 import json
@@ -97,8 +97,8 @@ class LLMClient:
         messages: List[Dict[str, str]],
         tools: Optional[List[Dict]] = None,
         temperature: Optional[float] = None,
-    ) -> AsyncGenerator[str, None]:
-        """Стриминговый ответ от LLM."""
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """Стриминговый ответ от LLM — возвращает чанки с content и tool_calls."""
         
         kwargs = {
             "model": self.model,
@@ -115,8 +115,13 @@ class LLMClient:
         
         async for chunk in stream:
             delta = chunk.choices[0].delta
-            if delta.content:
-                yield delta.content
+            result = {}
+            if delta.content is not None:
+                result["content"] = delta.content
+            if hasattr(delta, "tool_calls") and delta.tool_calls:
+                result["tool_calls"] = delta.tool_calls
+            if result:
+                yield result
 
     def set_model(self, model: str) -> None:
         """Сменить модель."""

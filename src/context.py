@@ -1,10 +1,12 @@
 """
-Управление контекстом и историей сообщений.
+Управление контекстом и историей сообщений — с persistent memory.
 """
 
 import json
+import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
+from pathlib import Path
 
 
 @dataclass
@@ -30,15 +32,27 @@ class Message:
             result["name"] = self.name
         return result
 
+    @classmethod
+    def from_dict(cls, d: Dict) -> "Message":
+        return cls(
+            role=d["role"],
+            content=d.get("content"),
+            tool_calls=d.get("tool_calls"),
+            tool_call_id=d.get("tool_call_id"),
+            name=d.get("name"),
+            metadata=d.get("metadata", {}),
+        )
+
 
 class ContextManager:
-    """Управление контекстом разговора с LLM."""
+    """Управление контекстом разговора с LLM и persistent memory."""
 
     def __init__(self, max_messages: int = 100, max_tokens_estimate: int = 64000):
         self.messages: List[Message] = []
         self.max_messages = max_messages
         self.max_tokens_estimate = max_tokens_estimate
         self.system_prompt: str = ""
+        self.memory_file = Path.home() / ".deepseek_agent_memory.json"
 
     def set_system_prompt(self, prompt: str) -> None:
         self.system_prompt = prompt
@@ -96,6 +110,32 @@ class ContextManager:
         """Очистить историю (кроме system prompt)."""
         system_msgs = [m for m in self.messages if m.role == "system"]
         self.messages = system_msgs
+        self._save_memory()
+
+    def save_session(self) -> None:
+        """Сохранить текущую сессию в память."""
+        self._save_memory()
+
+    def load_session(self) -> None:
+        """Загрузить последнюю сессию из памяти."""
+        if self.memory_file.exists():
+            try:
+                data = json.loads(self.memory_file.read_text(encoding="utf-8"))
+                loaded = [Message.from_dict(m) for m in data if m.get("role") != "system"]
+                # Insert after system prompt
+                system_msgs = [m for m in self.messages if m.role == "system"]
+                self.messages = system_msgs + loaded
+                self._trim_context()
+            except Exception:
+                pass
+
+    def _save_memory(self) -> None:
+        """Сохранить сообщения в файл."""
+        try:
+            data = [m.to_dict() for m in self.messages if m.role != "system"]
+            self.memory_file.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass
 
     def _trim_context(self) -> None:
         """Удалить старые сообщения если контекст слишком большой."""

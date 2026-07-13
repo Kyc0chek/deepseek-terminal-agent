@@ -8,6 +8,8 @@ from .base import BaseTool
 from .file_tools import ReadFileTool, WriteFileTool, EditFileTool, ListDirTool, DeleteFileTool
 from .shell_tools import BashTool, ViewWorkingDirTool
 from .search_tools import SearchFilesTool, GrepTool
+from .git_tools import GitStatusTool, GitLogTool, GitDiffTool
+from .code_tools import ViewProjectTreeTool, CodeReviewTool, GetFileSummaryTool
 
 
 class ToolRegistry:
@@ -58,5 +60,15 @@ def create_default_registry(working_dir: str = ".") -> ToolRegistry:
     # Search tools
     registry.register(SearchFilesTool())
     registry.register(GrepTool())
+    
+    # Git tools
+    registry.register(GitStatusTool(working_dir=working_dir))
+    registry.register(GitLogTool(working_dir=working_dir))
+    registry.register(GitDiffTool(working_dir=working_dir))
+    
+    # Code analysis tools
+    registry.register(ViewProjectTreeTool())
+    registry.register(CodeReviewTool())
+    registry.register(GetFileSummaryTool())
     
     return registry
