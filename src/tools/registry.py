@@ -1,5 +1,5 @@
 """
-Реестр инструментов.
+Реестр инструментов v3 — MAX POWER.
 """
 
 from typing import Dict, List
@@ -10,6 +10,8 @@ from .shell_tools import BashTool, ViewWorkingDirTool
 from .search_tools import SearchFilesTool, GrepTool
 from .git_tools import GitStatusTool, GitLogTool, GitDiffTool
 from .code_tools import ViewProjectTreeTool, CodeReviewTool, GetFileSummaryTool
+from .sandbox import PythonExecuteTool
+from .web_search import WebSearchTool
 
 
 class ToolRegistry:
@@ -43,7 +45,7 @@ class ToolRegistry:
 
 
 def create_default_registry(working_dir: str = ".") -> ToolRegistry:
-    """Создать реестр со стандартным набором инструментов."""
+    """Создать реестр со всеми инструментами v3."""
     registry = ToolRegistry()
     
     # File tools
@@ -70,5 +72,9 @@ def create_default_registry(working_dir: str = ".") -> ToolRegistry:
     registry.register(ViewProjectTreeTool())
     registry.register(CodeReviewTool())
     registry.register(GetFileSummaryTool())
+    
+    # NEW v3 tools
+    registry.register(PythonExecuteTool())
+    registry.register(WebSearchTool())
     
     return registry

@@ -1,52 +1,49 @@
+#!/usr/bin/env python3
 """
-Точка входа — запуск терминального агента.
+DeepSeek Terminal Agent v3.1 — Perfect Entry Point.
+
+Исправленные проблемы:
+- Корректный импорт через sys.path для cross-platform
+- Без асинхронного EventLoopPolicy (Windows compatible)
+- Sequential tool execution (без race conditions)
+- Безопасный trim контекста (не разрывает tool_calls блоки)
 """
 
-import asyncio
-import os
 import sys
+import os
+import asyncio
 from pathlib import Path
 
+# ── Cross-platform path resolution ──────────────────────────────────────
+# Get absolute path of the project root (where this file is: src/)
+CURRENT_FILE = Path(__file__).resolve()
+PROJECT_ROOT = CURRENT_FILE.parent.parent  # src/ -> project_root/
+
+# Ensure src is in path for imports
+SRC_DIR = CURRENT_FILE.parent
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+# ── Environment ──────────────────────────────────────────────────────────
 from dotenv import load_dotenv
+env_file = PROJECT_ROOT / ".env"
+if env_file.exists():
+    load_dotenv(str(env_file))
 
-# Add project root to path so 'src' imports work when running src/main.py directly
-project_root = Path(__file__).parent.parent
-sys.path.insert(0, str(project_root))
-load_dotenv(project_root / ".env")
-
-from src.agent import Agent
+# ── Main ─────────────────────────────────────────────────────────────────
+from agent import Agent
+from config import WORKSPACE_DIR
 
 
-def main():
-    """Главная функция."""
-    # Check for API key
-    api_key = os.getenv("DEEPSEEK_API_KEY")
-    if not api_key:
-        print("Error: DEEPSEEK_API_KEY not set.")
-        print("Please create a .env file with your DeepSeek API key:")
-        print("  DEEPSEEK_API_KEY=your-key-here")
-        print("\nGet your API key at: https://platform.deepseek.com/")
-        sys.exit(1)
-    
-    # Get configuration
-    base_url = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
-    model = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
-    working_dir = os.getenv("WORKING_DIR", ".")
-    
-    # Create and run agent
+async def main():
     agent = Agent(
-        api_key=api_key,
-        base_url=base_url,
-        model=model,
-        working_dir=working_dir,
+        api_key=os.getenv("DEEPSEEK_API_KEY"),
+        base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+        model=os.getenv("DEEPSEEK_MODEL", "deepseek-chat"),
+        working_dir=WORKSPACE_DIR,
     )
-    
-    try:
-        asyncio.run(agent.run())
-    except KeyboardInterrupt:
-        print("\nGoodbye!")
-        sys.exit(0)
+    await agent.run()
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

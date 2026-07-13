@@ -1,20 +1,21 @@
 """
-Основной цикл агента — улучшенная версия с proactive behavior и streaming.
+Основной цикл агента — v3.1 PERFECT. Sequential tools, ideal context flow.
 """
 
 import json
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from .llm_client import LLMClient
 from .context import ContextManager
-from .tools.registry import ToolRegistry, create_default_registry
+from .tools.registry import create_default_registry
 from .prompts import SYSTEM_PROMPT, REASONING_PROMPT
 from .repl import REPLInterface
+from .tools.undo_tracker import UndoTracker
 
 
 class Agent:
-    """Терминальный ИИ-агент с проактивным поведением."""
+    """Терминальный ИИ-агент v3.1 — идеальный поток."""
 
     def __init__(
         self,
@@ -27,24 +28,19 @@ class Agent:
         self.model = model
         self.reasoning_mode = model == "deepseek-reasoner"
         
-        # Initialize components
-        self.llm = LLMClient(
-            api_key=api_key,
-            base_url=base_url,
-            model=model,
-        )
+        self.llm = LLMClient(api_key=api_key, base_url=base_url, model=model)
         self.tools = create_default_registry(working_dir=self.working_dir)
         self.context = ContextManager()
         self.repl = REPLInterface()
+        self.undo = UndoTracker()
         
-        # Load previous session memory
         self.context.load_session()
-        
-        # Set system prompt
         self._update_system_prompt()
+        
+        self.total_turns = 0
+        self.total_cost_usd = 0.0
 
     def _update_system_prompt(self) -> None:
-        """Обновить системный промпт."""
         tool_descriptions = self.tools.get_tool_descriptions()
         prompt = SYSTEM_PROMPT.format(
             tool_descriptions=tool_descriptions,
@@ -55,17 +51,15 @@ class Agent:
         self.context.set_system_prompt(prompt)
 
     def set_model(self, model: str) -> None:
-        """Сменить модель."""
         self.model = model
         self.reasoning_mode = model == "deepseek-reasoner"
         self.llm.set_model(model)
         self._update_system_prompt()
 
     async def run(self) -> None:
-        """Запустить REPL."""
         self.repl.print_banner(self.llm.get_model_info())
         
-        if len(self.context.messages) > 1:
+        if len(self.context.messages) > 0:
             self.repl.print_info("💾 Previous session loaded. Type /clear to start fresh.")
         
         while True:
@@ -74,28 +68,21 @@ class Agent:
             if not user_input.strip():
                 continue
             
-            # Handle commands
             if user_input.startswith("/"):
                 if await self._handle_command(user_input):
                     break
                 continue
             
-            # Process user request
             await self._process_request(user_input)
-            
-            # Save session after each turn
             self.context.save_session()
-            
-            # Print divider for readability
             self.repl.print_divider()
 
     async def _handle_command(self, command: str) -> bool:
-        """Обработать слэш-команду. Возвращает True если нужно выйти."""
         parts = command.strip().split()
         cmd = parts[0].lower()
         
         if cmd in ["/exit", "/quit"]:
-            self.repl.print_info("Goodbye! Session saved.")
+            self.repl.print_info(f"Goodbye! Session saved. Total cost: ${self.total_cost_usd:.4f}")
             self.context.save_session()
             return True
         
@@ -104,108 +91,57 @@ class Agent:
             self.repl.print_info("Context cleared. Starting fresh.")
         
         elif cmd == "/model" and len(parts) > 1:
-            new_model = parts[1]
-            self.set_model(new_model)
-            self.repl.print_info(f"Model switched to: {new_model}")
+            self.set_model(parts[1])
+            self.repl.print_info(f"Model switched to: {self.model}")
         
         elif cmd == "/think":
             self.reasoning_mode = not self.reasoning_mode
-            new_model = "deepseek-reasoner" if self.reasoning_mode else "deepseek-chat"
-            self.set_model(new_model)
+            self.set_model("deepseek-reasoner" if self.reasoning_mode else "deepseek-chat")
             self.repl.print_info(f"Reasoning mode: {'ON' if self.reasoning_mode else 'OFF'}")
         
         elif cmd == "/tools":
-            self.repl.print_info("Available tools:")
             for name in self.tools.list_tools():
                 self.repl.print_info(f"  • {name}")
         
         elif cmd == "/status":
-            self.repl.print_info(f"Session: {self.repl.session_count} messages | {self.context.estimate_tokens()} est. tokens")
-            self.repl.print_info(f"Model: {self.model}")
-            self.repl.print_info(f"Working dir: {self.working_dir}")
-            self.repl.print_info(f"Tool calls this session: {self.repl.total_tool_calls}")
+            self.repl.print_info(f"Turns: {self.total_turns} | Est. tokens: {self.context.estimate_tokens()}")
+            self.repl.print_info(f"Model: {self.model} | Working dir: {self.working_dir}")
+            self.repl.print_info(f"Tool calls: {self.repl.total_tool_calls} | Est. cost: ${self.total_cost_usd:.4f}")
+        
+        elif cmd == "/undo":
+            undone = self.undo.undo_last()
+            if undone:
+                self.repl.print_success(f"Undid: {undone}")
+            else:
+                self.repl.print_error("Nothing to undo.")
         
         elif cmd == "/help":
             self.repl.print_help()
         
         else:
-            self.repl.print_error(f"Unknown command: {cmd}. Type /help for available commands.")
+            self.repl.print_error(f"Unknown command: {cmd}. Type /help.")
         
         return False
 
     async def _process_request(self, user_input: str) -> None:
-        """Обработать запрос пользователя."""
-        # Add user message to context
+        """Process a user request with perfect tool flow.
+        
+        Flow:
+        1. Add user message to context
+        2. Call LLM -> get response
+        3. If tool_calls: add assistant with tool_calls, execute each tool, add tool results
+        4. Repeat step 2-3 up to 25 iterations
+        5. Final assistant message with content
+        """
         self.context.add_user_message(user_input)
+        self.total_turns += 1
         self.repl.session_count += 1
         
-        # Get available tools
         tool_schemas = self.tools.get_schemas()
         
-        # Call LLM
-        try:
-            response = await self.llm.chat(
-                messages=self.context.get_messages(),
-                tools=tool_schemas,
-            )
-        except Exception as e:
-            self.repl.print_error(f"LLM error: {e}")
-            return
-        
-        # Show reasoning if present (R1 mode)
-        if response.get("reasoning_content"):
-            self.repl.print_thinking(response["reasoning_content"])
-        
-        # Show token usage
-        if response.get("usage"):
-            u = response["usage"]
-            self.repl.print_token_usage(u["prompt_tokens"], u["completion_tokens"])
-        
-        # Handle tool calls in a loop (LLM may want multiple rounds)
-        max_iterations = 10
-        iteration = 0
-        
-        while response.get("tool_calls") and iteration < max_iterations:
-            iteration += 1
-            
-            # Add assistant message with tool calls to context
-            self.context.add_assistant_message(
-                content=None,
-                tool_calls=response["tool_calls"],
-            )
-            
-            # Execute all tools in this round
-            for tc in response["tool_calls"]:
-                tool_name = tc["function"]["name"]
-                tool_id = tc["id"]
-                
-                try:
-                    args = json.loads(tc["function"]["arguments"])
-                except json.JSONDecodeError:
-                    args = {}
-                
-                self.repl.print_tool_call(tool_name, tc["function"]["arguments"])
-                
-                if not self.tools.has(tool_name):
-                    error = f"Tool '{tool_name}' not found"
-                    self.repl.print_tool_result(error, success=False)
-                    self.context.add_tool_result(tool_id, tool_name, error)
-                    continue
-                
-                tool = self.tools.get(tool_name)
-                try:
-                    result = await tool.execute(**args)
-                    self.repl.print_tool_result(result.content, success=result.success)
-                    self.context.add_tool_result(
-                        tool_id, tool_name, 
-                        f"{'Success' if result.success else 'Error'}: {result.content}"
-                    )
-                except Exception as e:
-                    error = str(e)
-                    self.repl.print_tool_result(error, success=False)
-                    self.context.add_tool_result(tool_id, tool_name, f"Error: {error}")
-            
-            # Call LLM again with tool results
+        # Main interaction loop
+        for iteration in range(25):
+            # Call LLM
             try:
                 response = await self.llm.chat(
                     messages=self.context.get_messages(),
@@ -215,28 +151,108 @@ class Agent:
                 self.repl.print_error(f"LLM error: {e}")
                 return
             
+            self._track_cost(response)
+            
             # Show reasoning if present (R1 mode)
             if response.get("reasoning_content"):
                 self.repl.print_thinking(response["reasoning_content"])
             
-            # Show token usage for this round
-            if response.get("usage"):
-                u = response["usage"]
-                self.repl.print_token_usage(u["prompt_tokens"], u["completion_tokens"])
+            tool_calls = response.get("tool_calls")
+            content = response.get("content")
+            
+            # No tool calls — this is the final response
+            if not tool_calls:
+                self.context.add_assistant_message(content=content)
+                if content:
+                    self.repl.print_response(content)
+                else:
+                    self.repl.print_info("Model returned empty response. Try rephrasing.")
+                return
+            
+            # Has tool calls — add assistant message with tool_calls
+            # IMPORTANT: content must be None for assistant with tool_calls
+            self.context.add_assistant_message(content=None, tool_calls=tool_calls)
+            
+            # Execute each tool SEQUENTIALLY (ensures correct order)
+            for tc in tool_calls:
+                tool_id = tc["id"]
+                tool_name = tc["function"]["name"]
+                try:
+                    args = json.loads(tc["function"]["arguments"])
+                except json.JSONDecodeError:
+                    args = {}
+                
+                self.repl.print_tool_call(tool_name, tc["function"]["arguments"])
+                
+                # Execute tool with retry
+                result_content, success = await self._execute_tool(
+                    tool_name, args, tool_id
+                )
+                
+                # Add tool result to context IMMEDIATELY after each tool execution
+                # This ensures the API always sees: assistant(tool_calls) -> tool -> tool -> ...
+                self.context.add_tool_result(
+                    tool_id,
+                    tool_name,
+                    f"{'Success' if success else 'Error'}: {result_content}",
+                )
+            
+            # Loop continues — call LLM again with tool results
         
-        # Add final assistant message (no tool calls)
-        self.context.add_assistant_message(
-            content=response.get("content"),
+        # Max iterations reached
+        self.repl.print_warning(
+            "Reached maximum tool call iterations (25). The task may be incomplete. "
+            "Try breaking it into smaller steps or ask a more specific question."
         )
+
+    async def _execute_tool(
+        self,
+        tool_name: str,
+        args: Dict,
+        tool_id: str,
+        max_retries: int = 1,
+    ) -> tuple[str, bool]:
+        """Execute a single tool with retry logic.
         
-        # Show final response
-        if response.get("content"):
-            self.repl.print_response(response["content"])
+        Returns: (result_content, success)
+        """
+        if not self.tools.has(tool_name):
+            error = f"Tool '{tool_name}' not found"
+            self.repl.print_tool_result(error, success=False)
+            return error, False
         
-        # If max iterations reached, warn
-        if iteration >= max_iterations:
-            self.repl.print_warning("Reached maximum tool call iterations (10). The task may be incomplete. Try breaking it into smaller steps.")
+        tool = self.tools.get(tool_name)
         
-        # Proactive: if no content but also no tool calls, something is wrong
-        if not response.get("content") and not response.get("tool_calls"):
-            self.repl.print_info("The model returned an empty response. This can happen with some models. Try rephrasing your request.")
+        for attempt in range(max_retries + 1):
+            try:
+                result = await tool.execute(**args)
+                self.repl.print_tool_result(result.content, success=result.success)
+                
+                # Track for undo
+                if tool_name in ("write_file", "edit_file") and "path" in args:
+                    self.undo.track_change(args["path"], tool_name)
+                
+                return result.content, result.success
+            except Exception as e:
+                error = str(e)
+                if attempt < max_retries:
+                    self.repl.print_info(f"Retrying {tool_name}... (attempt {attempt + 2}/{max_retries + 1})")
+                    import asyncio
+                    await asyncio.sleep(0.5)
+                else:
+                    self.repl.print_tool_result(error, success=False)
+                    return error, False
+        
+        return "Unknown error", False
+
+    def _track_cost(self, response: Dict) -> None:
+        """Track estimated API cost."""
+        if response.get("usage"):
+            u = response["usage"]
+            total = u.get("total_tokens", 0)
+            cost = total * 0.20 / 1_000_000
+            self.total_cost_usd += cost
+            self.repl.print_token_usage(
+                u.get("prompt_tokens", 0),
+                u.get("completion_tokens", 0),
+            )

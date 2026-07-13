@@ -1,5 +1,5 @@
 """
-Управление контекстом и историей сообщений — с persistent memory.
+Управление контекстом и историей сообщений — идеальная реализация.
 """
 
 import json
@@ -12,25 +12,35 @@ from pathlib import Path
 @dataclass
 class Message:
     """Одно сообщение в контексте."""
-    role: str  # system, user, assistant, tool
-    content: Optional[str]
+    role: str
+    content: Optional[str] = None
     tool_calls: Optional[List[Dict]] = None
     tool_call_id: Optional[str] = None
     name: Optional[str] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
-        result = {
-            "role": self.role,
-            "content": self.content,
-        }
-        if self.tool_calls:
-            result["tool_calls"] = self.tool_calls
-        if self.tool_call_id:
-            result["tool_call_id"] = self.tool_call_id
-        if self.name:
-            result["name"] = self.name
-        return result
+        """Convert to OpenAI API format."""
+        if self.role == "assistant" and self.tool_calls:
+            # Assistant with tool_calls: content MUST be null
+            return {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": self.tool_calls,
+            }
+        elif self.role == "tool":
+            # Tool result
+            return {
+                "role": "tool",
+                "content": self.content or "",
+                "tool_call_id": self.tool_call_id or "",
+                "name": self.name or "",
+            }
+        else:
+            # user, assistant (no tool_calls), system
+            return {
+                "role": self.role,
+                "content": self.content or "",
+            }
 
     @classmethod
     def from_dict(cls, d: Dict) -> "Message":
@@ -40,40 +50,54 @@ class Message:
             tool_calls=d.get("tool_calls"),
             tool_call_id=d.get("tool_call_id"),
             name=d.get("name"),
-            metadata=d.get("metadata", {}),
         )
 
 
 class ContextManager:
-    """Управление контекстом разговора с LLM и persistent memory."""
+    """Идеальное управление контекстом разговора с LLM."""
 
-    def __init__(self, max_messages: int = 100, max_tokens_estimate: int = 64000):
+    def __init__(self, max_messages: int = 100):
+        # System prompt stored separately — NOT in messages
+        self.system_prompt: str = ""
+        # Only user/assistant/tool messages here
         self.messages: List[Message] = []
         self.max_messages = max_messages
-        self.max_tokens_estimate = max_tokens_estimate
-        self.system_prompt: str = ""
         self.memory_file = Path.home() / ".deepseek_agent_memory.json"
 
     def set_system_prompt(self, prompt: str) -> None:
+        """Set system prompt (stored separately from conversation)."""
         self.system_prompt = prompt
-        # Remove old system prompt if exists
-        self.messages = [m for m in self.messages if m.role != "system"]
-        # Insert new system prompt at the beginning
-        self.messages.insert(0, Message(role="system", content=prompt))
 
     def add_user_message(self, content: str) -> None:
+        """Add user message."""
         self.messages.append(Message(role="user", content=content))
         self._trim_context()
 
     def add_assistant_message(
-        self, content: Optional[str], tool_calls: Optional[List[Dict]] = None
+        self,
+        content: Optional[str],
+        tool_calls: Optional[List[Dict]] = None,
     ) -> None:
+        """Add assistant message.
+        
+        If tool_calls provided, content should be None (API requirement).
+        If no tool_calls, content is the text response.
+        """
         self.messages.append(
             Message(role="assistant", content=content, tool_calls=tool_calls)
         )
         self._trim_context()
 
-    def add_tool_result(self, tool_call_id: str, name: str, result: str) -> None:
+    def add_tool_result(
+        self,
+        tool_call_id: str,
+        name: str,
+        result: str,
+    ) -> None:
+        """Add tool result message.
+        
+        Must immediately follow an assistant message with matching tool_calls.
+        """
         self.messages.append(
             Message(
                 role="tool",
@@ -85,78 +109,101 @@ class ContextManager:
         self._trim_context()
 
     def get_messages(self) -> List[Dict[str, Any]]:
-        """Получить сообщения в формате для OpenAI API."""
+        """Get all messages in exact API format.
+        
+        Order: system -> user -> assistant (tool_calls) -> tool -> tool -> ... -> assistant
+        """
         result = []
+        
+        # System prompt first
+        if self.system_prompt:
+            result.append({"role": "system", "content": self.system_prompt})
+        
+        # Then all conversation messages
         for msg in self.messages:
-            if msg.role == "system" and self.system_prompt:
-                result.append({"role": "system", "content": self.system_prompt})
-            elif msg.role == "assistant" and msg.tool_calls:
-                # content must be null for assistant messages with tool_calls
-                d = {"role": "assistant", "content": None}
-                d["tool_calls"] = msg.tool_calls
-                result.append(d)
-            elif msg.role == "tool":
-                result.append({
-                    "role": "tool",
-                    "content": msg.content,
-                    "tool_call_id": msg.tool_call_id,
-                    "name": msg.name,
-                })
-            else:
-                result.append({"role": msg.role, "content": msg.content})
+            result.append(msg.to_dict())
+        
         return result
 
+    def get_last_assistant_tool_calls(self) -> Optional[List[Dict]]:
+        """Get tool_calls from the most recent assistant message."""
+        for msg in reversed(self.messages):
+            if msg.role == "assistant" and msg.tool_calls:
+                return msg.tool_calls
+        return None
+
     def clear(self) -> None:
-        """Очистить историю (кроме system prompt)."""
-        system_msgs = [m for m in self.messages if m.role == "system"]
-        self.messages = system_msgs
+        """Clear all conversation messages (keeps system prompt)."""
+        self.messages = []
         self._save_memory()
 
     def save_session(self) -> None:
-        """Сохранить текущую сессию в память."""
+        """Save current session to disk."""
         self._save_memory()
 
     def load_session(self) -> None:
-        """Загрузить последнюю сессию из памяти."""
-        if self.memory_file.exists():
-            try:
-                data = json.loads(self.memory_file.read_text(encoding="utf-8"))
-                loaded = [Message.from_dict(m) for m in data if m.get("role") != "system"]
-                # Insert after system prompt
-                system_msgs = [m for m in self.messages if m.role == "system"]
-                self.messages = system_msgs + loaded
-                self._trim_context()
-            except Exception:
-                pass
+        """Load previous session from disk."""
+        if not self.memory_file.exists():
+            return
+        try:
+            data = json.loads(self.memory_file.read_text(encoding="utf-8"))
+            for m in data:
+                if m.get("role") == "system":
+                    continue  # Skip saved system prompts
+                self.messages.append(Message.from_dict(m))
+            self._trim_context()
+        except Exception:
+            pass
 
     def _save_memory(self) -> None:
-        """Сохранить сообщения в файл."""
+        """Save messages to disk."""
         try:
-            data = [m.to_dict() for m in self.messages if m.role != "system"]
-            self.memory_file.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            data = [msg.to_dict() for msg in self.messages]
+            self.memory_file.write_text(
+                json.dumps(data, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
         except Exception:
             pass
 
     def _trim_context(self) -> None:
-        """Удалить старые сообщения если контекст слишком большой."""
-        # Simple strategy: keep last N messages
-        if len(self.messages) > self.max_messages:
-            # Always keep system prompt
-            system_msgs = [m for m in self.messages if m.role == "system"]
-            other_msgs = [m for m in self.messages if m.role != "system"]
-            # Keep last N-1 other messages (leave room for system)
-            keep = self.max_messages - len(system_msgs)
-            other_msgs = other_msgs[-keep:]
-            self.messages = system_msgs + other_msgs
+        """Trim old messages if context too large."""
+        if len(self.messages) <= self.max_messages:
+            return
+        
+        # Strategy: keep system prompt + most recent messages
+        # But we must preserve the structure: assistant(tool_calls) + tool results
+        # So we trim from the beginning, but never break a tool_calls block
+        
+        to_remove = len(self.messages) - self.max_messages
+        if to_remove <= 0:
+            return
+        
+        # Find a safe cut point — after all tool results of a tool_calls block
+        cut_idx = 0
+        i = 0
+        while i < to_remove:
+            msg = self.messages[i]
+            if msg.role == "assistant" and msg.tool_calls:
+                # Skip past all tool results for this tool_calls
+                i += 1
+                while i < len(self.messages) and self.messages[i].role == "tool":
+                    i += 1
+            else:
+                i += 1
+            cut_idx = i
+        
+        self.messages = self.messages[cut_idx:]
 
     def estimate_tokens(self) -> int:
-        """Грубая оценка количества токенов."""
-        total_chars = sum(len(m.content or "") for m in self.messages)
-        # Rough estimate: ~4 chars per token
+        """Rough token estimate."""
+        total_chars = len(self.system_prompt)
+        for msg in self.messages:
+            total_chars += len(msg.content or "")
+            if msg.tool_calls:
+                for tc in msg.tool_calls:
+                    total_chars += len(tc.get("function", {}).get("arguments", ""))
         return total_chars // 4
 
     def __len__(self) -> int:
         return len(self.messages)
-
-    def __repr__(self) -> str:
-        return f"ContextManager(messages={len(self.messages)}, estimated_tokens={self.estimate_tokens()})"
