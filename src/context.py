@@ -85,6 +85,7 @@ class ContextManager:
                     "role": "tool",
                     "content": msg.content,
                     "tool_call_id": msg.tool_call_id,
+                    "name": msg.name,
                 })
             else:
                 result.append({"role": msg.role, "content": msg.content})
