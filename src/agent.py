@@ -139,33 +139,23 @@ class Agent:
         # Handle tool calls
         if response.get("tool_calls"):
             # Add assistant message with tool calls to context
-            tool_calls_for_context = []
-            for tc in response["tool_calls"]:
-                tool_calls_for_context.append({
-                    "id": tc["id"],
-                    "type": "function",
-                    "function": {
-                        "name": tc["name"],
-                        "arguments": tc["arguments"],
-                    }
-                })
-            
+            # tool_calls are already in full OpenAI format from llm_client
             self.context.add_assistant_message(
                 content=response["content"] or "",
-                tool_calls=tool_calls_for_context,
+                tool_calls=response["tool_calls"],
             )
             
             # Execute tools
             for tc in response["tool_calls"]:
-                tool_name = tc["name"]
+                tool_name = tc["function"]["name"]
                 tool_id = tc["id"]
                 
                 try:
-                    args = json.loads(tc["arguments"])
+                    args = json.loads(tc["function"]["arguments"])
                 except json.JSONDecodeError:
                     args = {}
                 
-                self.repl.print_tool_call(tool_name, tc["arguments"])
+                self.repl.print_tool_call(tool_name, tc["function"]["arguments"])
                 
                 if not self.tools.has(tool_name):
                     error = f"Tool '{tool_name}' not found"
