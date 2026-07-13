@@ -64,13 +64,16 @@ class LLMClient:
             "reasoning_content": None,
         }
         
-        # Extract tool calls if present
+        # Extract tool calls in full OpenAI format (with 'type' and 'function')
         if hasattr(message, "tool_calls") and message.tool_calls:
             result["tool_calls"] = [
                 {
                     "id": tc.id,
-                    "name": tc.function.name,
-                    "arguments": tc.function.arguments,
+                    "type": "function",
+                    "function": {
+                        "name": tc.function.name,
+                        "arguments": tc.function.arguments,
+                    },
                 }
                 for tc in message.tool_calls
             ]
