@@ -19,6 +19,15 @@
 git clone https://github.com/Kyc0chek/deepseek-terminal-agent.git
 cd deepseek-terminal-agent
 
+# Создать виртуальное окружение (рекомендуется)
+python -m venv .venv
+
+# Активировать окружение
+# Windows:
+.venv\Scripts\activate
+# Linux/macOS:
+source .venv/bin/activate
+
 # Установить зависимости
 pip install -r requirements.txt
 
@@ -30,11 +39,11 @@ cp .env.example .env
 ## Быстрый старт
 
 ```bash
-# Запуск агента
-python -m src.main
-
-# Или
+# Запуск из корня проекта (рекомендуется):
 python src/main.py
+
+# Альтернативный способ:
+python -m src.main
 ```
 
 ## Конфигурация
@@ -52,6 +61,8 @@ MAX_TOKENS=8192
 TEMPERATURE=0.7
 WORKING_DIR=.
 ```
+
+Получить API ключ: https://platform.deepseek.com/
 
 ## Использование
 
