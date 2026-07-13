@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 class Message:
     """Одно сообщение в контексте."""
     role: str  # system, user, assistant, tool
-    content: str
+    content: Optional[str]
     tool_calls: Optional[List[Dict]] = None
     tool_call_id: Optional[str] = None
     name: Optional[str] = None
@@ -52,7 +52,7 @@ class ContextManager:
         self._trim_context()
 
     def add_assistant_message(
-        self, content: str, tool_calls: Optional[List[Dict]] = None
+        self, content: Optional[str], tool_calls: Optional[List[Dict]] = None
     ) -> None:
         self.messages.append(
             Message(role="assistant", content=content, tool_calls=tool_calls)
@@ -77,7 +77,8 @@ class ContextManager:
             if msg.role == "system" and self.system_prompt:
                 result.append({"role": "system", "content": self.system_prompt})
             elif msg.role == "assistant" and msg.tool_calls:
-                d = {"role": "assistant", "content": msg.content or ""}
+                # content must be null for assistant messages with tool_calls
+                d = {"role": "assistant", "content": None}
                 d["tool_calls"] = msg.tool_calls
                 result.append(d)
             elif msg.role == "tool":
@@ -110,7 +111,7 @@ class ContextManager:
 
     def estimate_tokens(self) -> int:
         """Грубая оценка количества токенов."""
-        total_chars = sum(len(m.content) for m in self.messages)
+        total_chars = sum(len(m.content or "") for m in self.messages)
         # Rough estimate: ~4 chars per token
         return total_chars // 4
 
