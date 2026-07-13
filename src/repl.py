@@ -7,7 +7,6 @@ from typing import Optional
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
-from prompt_toolkit.styles import Style
 from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
@@ -20,14 +19,8 @@ class REPLInterface:
         self.console = Console()
         self.history_file = os.path.expanduser("~/.deepseek_agent_history")
         
-        style = Style.from_dict({
-            "prompt": "#00d4aa bold",
-            "">"": "#00d4aa",
-        })
-        
         self.session = PromptSession(
             history=FileHistory(self.history_file),
-            style=style,
         )
 
     def print_banner(self, model_info: str) -> None:
