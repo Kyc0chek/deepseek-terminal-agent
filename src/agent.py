@@ -136,16 +136,20 @@ class Agent:
         if response.get("reasoning_content"):
             self.repl.print_thinking(response["reasoning_content"])
         
-        # Handle tool calls
-        if response.get("tool_calls"):
+        # Handle tool calls in a loop (LLM may want multiple rounds)
+        max_iterations = 10
+        iteration = 0
+        
+        while response.get("tool_calls") and iteration < max_iterations:
+            iteration += 1
+            
             # Add assistant message with tool calls to context
-            # tool_calls are already in full OpenAI format from llm_client
             self.context.add_assistant_message(
-                content=response["content"] or "",
+                content=None,
                 tool_calls=response["tool_calls"],
             )
             
-            # Execute tools
+            # Execute all tools in this round
             for tc in response["tool_calls"]:
                 tool_name = tc["function"]["name"]
                 tool_id = tc["id"]
@@ -176,9 +180,9 @@ class Agent:
                     self.repl.print_tool_result(error, success=False)
                     self.context.add_tool_result(tool_id, tool_name, f"Error: {error}")
             
-            # Get final response after tool execution
+            # Call LLM again with tool results
             try:
-                final_response = await self.llm.chat(
+                response = await self.llm.chat(
                     messages=self.context.get_messages(),
                     tools=tool_schemas,
                 )
@@ -186,20 +190,15 @@ class Agent:
                 self.repl.print_error(f"LLM error: {e}")
                 return
             
-            # Add final assistant message
-            self.context.add_assistant_message(
-                content=final_response.get("content", ""),
-                tool_calls=final_response.get("tool_calls"),
-            )
-            
-            # Show final response
-            if final_response.get("content"):
-                self.repl.print_response(final_response["content"])
+            # Show reasoning if present (R1 mode)
+            if response.get("reasoning_content"):
+                self.repl.print_thinking(response["reasoning_content"])
         
-        else:
-            # No tool calls, just show response
-            self.context.add_assistant_message(
-                content=response.get("content", ""),
-            )
-            if response.get("content"):
-                self.repl.print_response(response["content"])
+        # Add final assistant message (no tool calls)
+        self.context.add_assistant_message(
+            content=response.get("content"),
+        )
+        
+        # Show final response
+        if response.get("content"):
+            self.repl.print_response(response["content"])
