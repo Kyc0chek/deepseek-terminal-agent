@@ -9,8 +9,9 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-# Load .env from project root
+# Add project root to path so 'src' imports work when running src/main.py directly
 project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
 load_dotenv(project_root / ".env")
 
 from src.agent import Agent
